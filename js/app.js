@@ -94,6 +94,18 @@ function sendRender() {
 const cv = $("view"), ctx = cv.getContext("2d");
 let cssW = 0, cssH = 0, dpr = 1;
 const view = { s: 1, tx: 0, ty: 0, fit: 1 };
+/* Vollbild auf dem iPhone (Home Bildschirm App): iOS rechnet die Höhe sonst um die Statusleiste zu kurz */
+const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+if (standalone) document.documentElement.classList.add("standalone");
+function fixHeight() {
+  if (!standalone) return;
+  const portrait = innerHeight >= innerWidth;
+  const sh = portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width);
+  document.documentElement.style.setProperty("--app-h", Math.max(innerHeight, sh) + "px");
+}
+fixHeight();
+addEventListener("resize", fixHeight);
+addEventListener("orientationchange", () => setTimeout(fixHeight, 300));
 function resize() {
   const r = $("stage").getBoundingClientRect();
   dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -349,6 +361,37 @@ function embeddedJpeg(b) {
   return best;
 }
 
+/* EXIF aus JPEG übernehmen, damit Lightroom Aufnahmedatum und Kamera kennt. Ausrichtung wird auf 1 gesetzt, weil sie schon angewendet ist. */
+function extractExif(b) {
+  if (b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let o = 2;
+  while (o + 4 < b.length && b[o] === 0xff) {
+    const mk = b[o + 1], len = u16(b, o + 2, false);
+    if (mk === 0xda) break;
+    if (mk === 0xe1 && b[o + 4] === 0x45 && b[o + 5] === 0x78 && b[o + 6] === 0x69 && b[o + 7] === 0x66) {
+      const seg = b.slice(o, o + 2 + len), base = 10, le = seg[base] === 0x49;
+      try {
+        const ifd = base + u32(seg, base + 4, le), cnt = u16(seg, ifd, le);
+        for (let i = 0; i < cnt; i++) {
+          const e = ifd + 2 + i * 12;
+          if (u16(seg, e, le) === 0x0112) { if (le) { seg[e + 8] = 1; seg[e + 9] = 0; } else { seg[e + 8] = 0; seg[e + 9] = 1; } }
+        }
+      } catch (err) { /* EXIF unlesbar, trotzdem übernehmen */ }
+      return seg;
+    }
+    o += 2 + len;
+  }
+  return null;
+}
+async function withExif(blob) {
+  if (!img || !img.exif) return blob;
+  const b = new Uint8Array(await blob.arrayBuffer());
+  if (b[0] !== 0xff || b[1] !== 0xd8) return blob;
+  let o = 2;
+  if (b[2] === 0xff && b[3] === 0xe0) o = 4 + u16(b, 4, false); // JFIF Kopf ersetzen
+  return new Blob([b.subarray(0, 2), img.exif, b.subarray(o)], { type: "image/jpeg" });
+}
+
 async function openFile(file) {
   showBusy("Foto wird geladen", file.name);
   analyzed = false; faces = []; region = null; spotCount = 0;
@@ -356,7 +399,7 @@ async function openFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
   let note = "";
-  const meta = { name: file.name.replace(/\.[^.]+$/, ""), raw: false };
+  const meta = { name: file.name.replace(/\.[^.]+$/, ""), raw: false, exif: isJpeg ? extractExif(bytes) : null };
   const loaded = waitFor("loaded");
   if (RAW_EXT.has(ext) || (!isJpeg && !file.type.startsWith("image/") && ext !== "heic" && ext !== "heif")) {
     meta.raw = true;
@@ -697,7 +740,7 @@ $("btnDoExport").onclick = async () => {
       W.postMessage({ type: "export", P, maxEdge: exp.maxEdge, quality: exp.quality, sr: false });
       res = await ex;
     }
-    showDone(res.blob, name, res.w, res.h);
+    showDone(await withExif(res.blob), name, res.w, res.h);
   } catch (e) {
     console.error(e); hideBusy();
     toast(e.message === "cancel" ? "Abgebrochen" : "Sichern fehlgeschlagen: " + (e.message || e), e.message !== "cancel");
@@ -713,15 +756,25 @@ function showDone(blob, name, w, h) {
   const box = document.createElement("div"); box.className = "done-box"; box.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-top:16px";
   const file = new File([blob], name, { type: "image/jpeg" });
   const canShare = navigator.canShare && navigator.canShare({ files: [file] });
-  const b1 = document.createElement("button"); b1.className = "big"; b1.innerHTML = `<svg><use href="#i-save"/></svg>${canShare ? "In Fotos sichern / Teilen" : "Herunterladen"}`;
-  b1.onclick = async () => {
-    if (canShare) { try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== "AbortError") download(blob, name); } }
-    else download(blob, name);
+  const share = async () => {
+    try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== "AbortError") download(blob, name); }
   };
+  if (canShare) {
+    const lr = document.createElement("button"); lr.className = "big"; lr.innerHTML = `<svg><use href="#i-lr-app"/></svg>An Lightroom senden`;
+    lr.onclick = share;
+    const note = document.createElement("div"); note.className = "done-note"; note.textContent = "Im Teilen Menü „Lightroom“ wählen. Fehlt es, ganz rechts auf „Mehr“ tippen.";
+    const ph = document.createElement("button"); ph.className = "ghost"; ph.style.justifyContent = "center"; ph.innerHTML = `<svg><use href="#i-save"/></svg>In Fotos sichern`;
+    ph.onclick = share;
+    const dl = document.createElement("button"); dl.className = "ghost"; dl.style.justifyContent = "center"; dl.textContent = "In Dateien sichern";
+    dl.onclick = () => download(blob, name);
+    box.append(lr, note, ph, dl);
+  } else {
+    const b1 = document.createElement("button"); b1.className = "big"; b1.innerHTML = `<svg><use href="#i-save"/></svg>Herunterladen`;
+    b1.onclick = () => download(blob, name);
+    box.append(b1);
+  }
   const b2 = document.createElement("button"); b2.className = "ghost"; b2.textContent = "Schließen"; b2.style.justifyContent = "center";
   b2.onclick = () => { box.remove(); hideBusy(); };
-  box.append(b1);
-  if (canShare) { const b3 = document.createElement("button"); b3.className = "ghost"; b3.textContent = "Als Datei laden"; b3.style.justifyContent = "center"; b3.onclick = () => download(blob, name); box.append(b3); }
   box.append(b2);
   card.append(box);
 }

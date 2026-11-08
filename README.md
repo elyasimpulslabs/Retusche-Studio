@@ -19,7 +19,8 @@ Porträt Retusche auf dem iPhone, so wie ein Retuscheur in Photoshop arbeitet. P
 * **Licht:** Belichtung, Kontrast, Wärme
 * **RAW:** DNG, CR2, CR3, NEF, ARW, RAF, ORF, RW2 und mehr (LibRaw); dazu JPEG, HEIC, PNG
 * Vorher/Nachher mit Trennlinie oder Gedrückthalten, Maskenansicht, Zoom bis 100 % in voller Auflösung, Rückgängig/Wiederholen
-* Sichern in voller Auflösung als neue Datei (`name_retusche.jpg`), das Original bleibt unverändert
+* Sichern in voller Auflösung als neue Datei (`name_retusche.jpg`), das Original bleibt unverändert. Aufnahmedatum und Kameradaten (EXIF) bleiben bei JPEG erhalten
+* **An Lightroom senden** über das Teilen Menü, außerdem In Fotos oder In Dateien sichern. Aus Lightroom kommt ein Foto über „Exportieren als“ in die App
 
 ## Datenschutz
 
