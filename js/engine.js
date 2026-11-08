@@ -276,7 +276,7 @@ export function analyzeFace(img, lmFull, idx) {
   const down = (p, f) => [p[0] - uu[0] * fh * f, p[1] - uu[1] * fh * f];
   const neckPoly = [];
   for (let i = 3; i <= 13; i++) neckPoly.push(Lp(i));
-  neckPoly.push(down(Lp(13), 1.0), down(Lp(8), 1.1), down(Lp(3), 1.0));
+  neckPoly.push(down(Lp(13), 0.7), down(Lp(8), 0.8), down(Lp(3), 0.7));
   fillPoly(neckReg, aw, ah, neckPoly);
 
   const eyeL = [36, 37, 38, 39, 40, 41].map(Lp), eyeR = [42, 43, 44, 45, 46, 47].map(Lp);
@@ -285,7 +285,10 @@ export function analyzeFace(img, lmFull, idx) {
   // Merkmale, die nie als Haut gelten
   fillPoly(feat, aw, ah, scalePoly(eyeL, 1.5)); fillPoly(feat, aw, ah, scalePoly(eyeR, 1.5));
   for (const [i0, i1] of [[17, 21], [22, 26]]) for (let i = i0; i < i1; i++) capsule(feat, aw, ah, Lp(i), Lp(i + 1), fw * 0.03);
-  fillPoly(feat, aw, ah, scalePoly(lipsOuter, 1.08));
+  // Lippen großzügig schützen: die 68 Punkte liegen oft innerhalb der echten Lippenkante, vor allem unten
+  const lipC = lipsOuter.reduce((a, p) => [a[0] + p[0] / 12, a[1] + p[1] / 12], [0, 0]);
+  const lipGrow = (f, fd) => lipsOuter.map((p) => { const dx = p[0] - lipC[0], dy = p[1] - lipC[1], dn = Math.hypot(dx, dy) || 1; const down = (dx * -uu[0] + dy * -uu[1]) / dn; return [lipC[0] + dx * f + (dx / dn) * fw * fd * Math.max(0, down), lipC[1] + dy * f + (dy / dn) * fw * fd * Math.max(0, down)]; });
+  fillPoly(feat, aw, ah, lipGrow(1.15, 0.04));
   capsule(feat, aw, ah, Lp(31), Lp(35), fw * 0.03);
   // Nasenflügel (Lp 31 und 35 sind die Flügelansätze) samt Falte zur Wange
   for (const [i, j] of [[31, 2], [35, 14]]) { const a = Lp(i), b = Lp(j), q = [a[0] + (b[0] - a[0]) * 0.12, a[1] + (b[1] - a[1]) * 0.12]; capsule(feat, aw, ah, Lp(i === 31 ? 32 : 34), q, fw * 0.035); }
@@ -293,7 +296,7 @@ export function analyzeFace(img, lmFull, idx) {
   featBig.set(feat);
   fillPoly(featBig, aw, ah, scalePoly(eyeL, 2.1)); fillPoly(featBig, aw, ah, scalePoly(eyeR, 2.1));
   for (const [i0, i1] of [[17, 21], [22, 26]]) for (let i = i0; i < i1; i++) capsule(featBig, aw, ah, Lp(i), Lp(i + 1), fw * 0.055);
-  fillPoly(featBig, aw, ah, scalePoly(lipsOuter, 1.25));
+  fillPoly(featBig, aw, ah, lipGrow(1.3, 0.06));
   capsule(featBig, aw, ah, Lp(31), Lp(35), fw * 0.075);
   capsule(featBig, aw, ah, Lp(32), Lp(34), fw * 0.08);
   capsule(featBig, aw, ah, Lp(36), Lp(39), fw * 0.055); capsule(featBig, aw, ah, Lp(42), Lp(45), fw * 0.055);
@@ -319,7 +322,7 @@ export function analyzeFace(img, lmFull, idx) {
     let col = Math.exp(-0.5 * (dcb * dcb + dcr * dcr));
     col *= smooth(mY * 0.28, mY * 0.5, Y[i]);
     col *= smooth(1, 7, Cr[i]) * (1 - smooth(-3, 4, Cb[i])); // Haut ist immer warm: Blau, Grau, Weiß sind nie Haut
-    const texOk = 1 - smooth(0.06, 0.11, texS[i] / Math.max(20, mY));
+    const texOk = 1 - smooth(0.03, 0.045, texS[i] / Math.max(20, mY)); // Stoff (Karo, Strick) hat viel mehr Struktur als Haut
     const reg = Math.max(faceS[i], neckS[i] * 0.85 * texOk);
     skin[i] = clamp(reg * Math.pow(col, 0.55) * (1 - featS[i]), 0, 1); // weicher Farbtest: auch Schatten und Bartansatz gehören zur Haut
   }
@@ -337,7 +340,7 @@ export function analyzeFace(img, lmFull, idx) {
   const RADII = [4 * s, 7.5 * s, 12 * s], RV = new Float32Array(8), RC = new Float32Array(8);
   for (let y = 0; y < ah; y++) for (let x = 0; x < aw; x++) {
     const i = y * aw + x;
-    const ok = skinS[i] > 0.4 && featBigS[i] < 0.2 && darkD[i] < 0.12;
+    const ok = skinS[i] > 0.4 && featBigS[i] < 0.2 && darkD[i] < 0.12 && texS[i] < mY * 0.045;
     allow[i] = ok ? 1 : 0;
     if (!ok) continue;
     let bd = -1, br = -99, bb = -1;
@@ -403,14 +406,17 @@ export function analyzeFace(img, lmFull, idx) {
     const vals = []; for (let i = 0; i < n; i++) if (teeth[i] > 0.5) vals.push(Y[i]);
     vals.sort((p, q) => p - q);
     mouthY = vals.length ? vals[Math.floor(vals.length * 0.85)] : 0;
-    hasTeeth = vals.length > 20 && mouthY > mY * 0.7;
+    // Zähne nur, wenn im Mund genug helle, wenig rote Pixel sind (geschlossener Mund = nur Lippen)
+    let tooth = 0, inner = 0;
+    for (let i = 0; i < n; i++) if (teeth[i] > 0.5) { inner++; if (Cr[i] < 12 && Y[i] > mY * 0.95) tooth++; }
+    hasTeeth = vals.length > 20 && mouthY > mY * 0.7 && tooth > inner * 0.25;
   }
   const teethS = hasTeeth ? gauss(teeth, aw, ah, fw * 0.004) : null;
 
   // Kanten für Augenwinkel etc. bleiben unberührt
   return {
     idx, cx0, cy0, cw, ch, aw, ah, ax, ay, s, fw, faceWFull: faceW, A, Y,
-    stats: { mdD, sdD, mdR, sdR, mdB, sdB }, dA, rA,
+    stats: { mdD, sdD, mdR, sdR, mdB, sdB }, dA, rA, texS, neckS, faceS,
     scoreP, labelP: new Int32Array(n), mp: null, PD: null,
     skin: skinS, score, allow, eye: eyeS, teeth: teethS, mouthY, mY, mCb, mCr,
     label: new Int32Array(n), comps: [], mb: new Float32Array(n), H: null, B2: null, B3: null,
@@ -600,7 +606,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
       }
       if (th > 0.002) {
         const Y = luma(out[0], out[1], out[2]), cb = toCb(out[0], out[1], out[2]), cr = toCr(out[0], out[1], out[2]);
-        const t = smooth(F.mouthY * 0.55, F.mouthY * 0.85, Y) * (1 - smooth(10, 24, cr)) * th * amZ;
+        const t = smooth(F.mouthY * 0.55, F.mouthY * 0.85, Y) * (1 - smooth(6, 14, cr)) * th * amZ;
         if (t > 0.001) {
           const Yn = Y + t * 0.16 * (255 - Y), cbn = cb < 0 ? cb * (1 - 0.8 * t) : cb, crn = cr * (1 - 0.35 * t);
           out[0] = Yn + 1.402 * crn; out[1] = Yn - 0.344136 * cbn - 0.714136 * crn; out[2] = Yn + 1.772 * cbn;

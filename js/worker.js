@@ -1,5 +1,5 @@
 /* Retusche Studio Rechen Worker. © 2026 Elyas Saciri (Ervin Saciri). */
-import * as E from "./engine.js?v=10";
+import * as E from "./engine.js?v=11";
 import jpegEncode from "../lib/jpeg/encoder.js";
 import jpegDecode from "../lib/jpeg/decoder.js";
 
