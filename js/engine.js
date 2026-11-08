@@ -504,11 +504,18 @@ export function updateBlemishes(F, sens, spots, sensP = 0) {
       const Hp = normConv(Ah, wP, aw, ah, 12 * s, F.B2);
       const mp = grow(hardP, aw, ah, 2.5 * s, 3.5 * s);
       F.mp = mp;
-      F.PD = Ah.map((c, k) => {
-        const L = gauss(c, aw, ah, 4 * s), d = new Float32Array(n), h = Hp[k];
-        for (let i = 0; i < n; i++) { const m = Math.min(1, mp[i]) * (F.skin[i] > 0.2 ? 1 : F.skin[i] * 5); d[i] = m * (h[i] - L[i]); }
-        return gauss(d, aw, ah, 2 * s);
-      });
+      const L3 = Ah.map((c) => gauss(c, aw, ah, 4 * s));
+      const D3 = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+      for (let i = 0; i < n; i++) {
+        const m = Math.min(1, mp[i]) * (F.skin[i] > 0.2 ? 1 : F.skin[i] * 5);
+        if (m < 0.001) continue;
+        const dr = Hp[0][i] - L3[0][i], dg = Hp[1][i] - L3[1][i], db = Hp[2][i] - L3[2][i];
+        const dY = luma(dr, dg, db);
+        if (dY <= 0) continue; // ein dunkler Fleck wird nur heller, nie dunkler
+        const lim = Math.min(1, 40 / Math.max(1, dY)); // nie mehr als ca. 40 Helligkeitsstufen
+        D3[0][i] = m * dr * lim; D3[1][i] = m * dg * lim; D3[2][i] = m * db * lim;
+      }
+      F.PD = D3.map((d) => gauss(d, aw, ah, 2 * s));
     }
   }
   return F.count + F.countP;
@@ -526,7 +533,7 @@ function sampler(F) {
 }
 
 /* Retusche eines Gesichts in den Arbeitspuffer (planar R,G,B, Region rx,ry,rw,rh im Quellbild, k = Originalpixel pro Quellpixel) */
-function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy) {
+function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
   const tx0 = Math.max(rx, Math.floor(F.cx0 / k)), tx1 = Math.min(rx + rw, Math.ceil((F.cx0 + F.cw) / k));
   const ty0 = Math.max(ry, Math.floor(F.cy0 / k)), ty1 = Math.min(ry + rh, Math.ceil((F.cy0 + F.ch) / k));
   if (tx1 <= tx0 || ty1 <= ty0) return;
@@ -545,7 +552,8 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy) {
     const fy = (y + 0.5) * k, ay = (fy - F.cy0) / F.ay - 0.5;
     for (let x = tx0; x < tx1; x++) {
       const fx = (x + 0.5) * k, ax = (fx - F.cx0) / F.ax - 0.5;
-      const sk = S(F.skin, ax, ay), mb = S(F.mb, ax, ay) * fadeB, ey = amE > 0 ? S(F.eye, ax, ay) : 0;
+      const cv = cover ? 1 - cover[(y - ry) * rw + (x - rx)] : 1;
+      const sk = S(F.skin, ax, ay), mb = S(F.mb, ax, ay) * fadeB * cv, ey = amE > 0 ? S(F.eye, ax, ay) : 0;
       const th = doTeeth ? S(F.teeth, ax, ay) : 0;
       const mpv = F.mp ? S(F.mp, ax, ay) : 0;
       if (sk < 0.002 && mb < 0.002 && ey < 0.002 && th < 0.002 && mpv < 0.002) continue;
@@ -572,7 +580,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy) {
         low[0] = Yn + 1.402 * crn; low[1] = Yn - 0.344136 * cbn - 0.714136 * crn; low[2] = Yn + 1.772 * cbn;
       }
       for (let c = 0; c < 3; c++) out[c] = low[c] + mid[c] + fine[c];
-      if (F.PD) for (let c = 0; c < 3; c++) out[c] += S(F.PD[c], ax, ay) * fadeP;
+      if (F.PD) for (let c = 0; c < 3; c++) out[c] += S(F.PD[c], ax, ay) * fadeP * cv;
       if (ey > 0.002) {
         const Y = luma(out[0], out[1], out[2]);
         const lift = amE * ey * 0.5 * Y * (1 - Math.min(255, Y) / 255);
@@ -587,6 +595,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy) {
           out[0] = Yn + 1.402 * crn; out[1] = Yn - 0.344136 * cbn - 0.714136 * crn; out[2] = Yn + 1.772 * cbn;
         }
       }
+      if (cv < 0.999) for (let c = 0; c < 3; c++) out[c] += (O[c] - out[c]) * (1 - cv); // Pinsel hat Vorrang
       if (Rm) { const rv = restoreAt(Rm, fx + oxy[0], fy + oxy[1]); if (rv > 0.003) for (let c = 0; c < 3; c++) out[c] += (O[c] - out[c]) * Math.min(1, rv); }
       for (let c = 0; c < 3; c++) pl[c][po] = out[c];
     }
@@ -676,11 +685,12 @@ export function renderRegion(src, rx, ry, rw, rh, P, faces, G, opts = {}) {
     let si = ((ry + y) * W + rx) * 3, o = y * rw;
     for (let x = 0; x < rw; x++, si += 3, o++) { pl[0][o] = d[si]; pl[1][o] = d[si + 1]; pl[2][o] = d[si + 2]; }
   }
-  applyPatches(pl, rx, ry, rw, rh, k, src.ox || 0, src.oy || 0, G.patches);
+  const cover = G.patches && G.patches.length ? new Float32Array(n) : null;
+  applyPatches(pl, rx, ry, rw, rh, k, src.ox || 0, src.oy || 0, G.patches, cover);
   denoise(pl, rw, rh, P.denoise / 100, G.noise / Math.max(1, k), k);
   const skinMap = new Float32Array(n);
   const oxy = [src.ox || 0, src.oy || 0];
-  if (faces) for (const F of faces) if (F.H) synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, G.restore, oxy);
+  if (faces) for (const F of faces) if (F.H) synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, G.restore, oxy, cover);
   detailAndSharpen(pl, rw, rh, P, k, G.longEdge, skinMap);
   const luts = lightLUT(P);
   if (luts) for (let c = 0; c < 3; c++) { const L = luts[c], p = pl[c]; for (let i = 0; i < n; i++) { const v = p[i]; p[i] = L[v <= 0 ? 0 : v >= 255 ? 1023 : (v * 4.0118) | 0]; } }
@@ -847,7 +857,7 @@ export function buildPatch(img, stroke) {
   return { bx, by, bw, bh, R, A, off: best ? [best.sx - bx, best.sy - by] : null };
 }
 
-export function applyPatches(pl, rx, ry, rw, rh, k, ox, oy, patches) {
+export function applyPatches(pl, rx, ry, rw, rh, k, ox, oy, patches, cover) {
   if (!patches || !patches.length) return;
   for (const p of patches) {
     if (!p) continue;
@@ -862,6 +872,7 @@ export function applyPatches(pl, rx, ry, rw, rh, k, ox, oy, patches) {
         if (a < 0.003) continue;
         const t = (y - ry) * rw + (x - rx);
         for (let c = 0; c < 3; c++) pl[c][t] += (bil(p.R[c]) - pl[c][t]) * a;
+        if (cover && a > cover[t]) cover[t] = a;
       }
     }
   }
