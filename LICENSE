@@ -1,0 +1,27 @@
+Copyright (c) 2026 Elyas Saciri (Ervin Saciri), Karlsruhe, Deutschland
+Alle Rechte vorbehalten.
+
+Retusche Studio, Porträt Retusche auf dem iPhone
+
+Diese Software einschließlich Quellcode, Gestaltung, Texte, Logo und Name
+"Retusche Studio" ist Eigentum von Elyas Saciri.
+
+Ohne vorherige schriftliche Erlaubnis ist es nicht gestattet, diese Software
+oder Teile davon zu kopieren, zu verändern, zu verbreiten, öffentlich
+zugänglich zu machen, unterzulizenzieren, zu verkaufen oder als Grundlage für
+eigene Produkte zu verwenden.
+
+Erlaubt ist allein die private Nutzung der unter
+https://elyasimpulslabs.github.io/Retusche-Studio/ bereitgestellten App.
+
+Dass der Quellcode hier einsehbar ist, bedeutet keine Erlaubnis zur Nutzung.
+
+Ausgenommen sind die Bibliotheken und Modelle von Dritten. Für sie gelten
+ihre eigenen Lizenzen:
+  - lib/face-api/ (Gesichtserkennung, Vladimir Mandic): MIT, siehe lib/face-api/LICENSE.txt
+  - lib/libraw/ (LibRaw-Wasm, ybouane): ISC; enthält LibRaw (LGPL 2.1 oder CDDL 1.0, https://www.libraw.org)
+  - lib/jpeg/ (jpeg-js): BSD 3, siehe lib/jpeg/LICENSE.txt
+  - models/face/ (face-api Modelle): MIT
+  - models/esrgan/ (UpscalerJS ESRGAN Medium, Kevin Scott): MIT, siehe models/esrgan/LICENSE.txt
+
+Anfragen zur Nutzung oder Lizenzierung bitte über GitHub an elyasimpulslabs.
