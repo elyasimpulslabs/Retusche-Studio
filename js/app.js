@@ -6,21 +6,21 @@ const CANVAS_MAX = 16000000;
 const SR_MAX = 12500000;
 
 /* ---------- Zustand ---------- */
-const DEF = { strokes: [], blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
+const DEF = { strokes: [], restores: [], blemFade: 100, blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
 const AUTO = { blemish: 60, marks: 55, skin: 28, tone: 35, eyes: 30, teeth: 45, sharpen: 25 };
 let P = clone(DEF);
 let hist = [], hi = -1;
 let img = null; // {name, w, h, pw, ph, noise, raw}
 let faces = [], analyzed = false, spotCount = 0, markCount = 0, hasTeeth = false;
 let tool = "auto", blemMode = "auto", enhMode = "denoise", autoAmt = 70;
-let brushSize = 44, paintStroke = null;
+let brushSize = 44, paintStroke = null, healMode = "heal", visSpots = false, srcOffs = [];
 let showMask = false, split = false, splitX = 0.5, holdBefore = false;
 const SR = { on: false, amt: 100 };
 const exp = { maxEdge: 0, quality: 95 };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
 /* ---------- Worker ---------- */
-const W = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+const W = new Worker(new URL("./worker.js?v=5", import.meta.url), { type: "module" });
 let rendering = false, dirty = false, version = 0, regionTimer = 0, regionBusy = false;
 let afterCanvas = document.createElement("canvas"), beforeCanvas = document.createElement("canvas");
 let region = null;
@@ -47,7 +47,7 @@ W.onmessage = (ev) => {
       if (m.id === version) {
         const a = document.createElement("canvas"), b = document.createElement("canvas");
         putRGBA(a, m.rgba, m.w, m.h); putRGBA(b, m.before, m.w, m.h);
-        region = { v: m.id, mask: showMask, rect: m.rect, after: a, before: b };
+        region = { v: m.id, mask: showMask, vis: visSpots, rect: m.rect, after: a, before: b };
         draw();
       } else scheduleRegion();
       break;
@@ -58,6 +58,7 @@ W.onmessage = (ev) => {
       if (t) toast(t);
       break;
     }
+    case "patchinfo": srcOffs = m.offs; draw(); break;
     case "srInput": resolve("srInput", m); break;
     case "exported": resolve("exported", m); break;
     case "crop": resolve("crop", m); break;
@@ -87,7 +88,7 @@ function requestRender() {
 }
 function sendRender() {
   rendering = true; dirty = false;
-  W.postMessage({ type: "render", P, mask: showMask, id: version });
+  W.postMessage({ type: "render", P, mask: showMask, vis: visSpots, id: version });
 }
 
 /* ---------- Ansicht ---------- */
@@ -135,7 +136,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   const dx = view.tx, dy = view.ty, dw = img.w * view.s, dh = img.h * view.s;
-  const hasRegion = region && region.v === version && region.mask === showMask;
+  const hasRegion = region && region.v === version && region.mask === showMask && region.vis === visSpots;
   const side = (before) => {
     ctx.drawImage(before ? beforeCanvas : afterCanvas, dx, dy, dw, dh);
     if (hasRegion) {
@@ -158,9 +159,24 @@ function draw() {
     ctx.moveTo(sx + 4, cssH / 2 - 5); ctx.lineTo(sx + 9, cssH / 2); ctx.lineTo(sx + 4, cssH / 2 + 5); ctx.stroke();
     $("lblBefore").style.left = "12px"; $("lblAfter").style.right = "12px";
   } else side(false);
+  // Quelle des letzten Strichs (verschiebbar)
+  const si = P.strokes.length - 1;
+  if (tool === "heal" && !holdBefore && si >= 0 && srcOffs[si] && !(paintStroke && !paintStroke.done)) {
+    const st = P.strokes[si], off = st.off || srcOffs[si];
+    ctx.save();
+    ctx.lineCap = ctx.lineJoin = "round";
+    const path = (ox, oy) => { ctx.beginPath(); const p0 = st.pts[0]; ctx.moveTo(dx + (p0[0] + ox) * view.s, dy + (p0[1] + oy) * view.s); for (const p of st.pts) ctx.lineTo(dx + (p[0] + ox) * view.s, dy + (p[1] + oy) * view.s); if (st.pts.length === 1) ctx.lineTo(dx + (p0[0] + ox) * view.s + 0.01, dy + (p0[1] + oy) * view.s); };
+    ctx.lineWidth = st.r * 2 * view.s + 3; ctx.strokeStyle = "rgba(255,255,255,0.9)"; path(off[0], off[1]); ctx.stroke();
+    ctx.lineWidth = st.r * 2 * view.s - 1; ctx.strokeStyle = "rgba(20,20,24,0.35)"; path(off[0], off[1]); ctx.stroke();
+    const c = srcCenter(st, off);
+    ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath(); ctx.moveTo(dx + c[2] * view.s, dy + c[3] * view.s); ctx.lineTo(dx + c[0] * view.s, dy + c[1] * view.s); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(dx + c[0] * view.s, dy + c[1] * view.s, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
   if (paintStroke) {
     ctx.save();
-    ctx.strokeStyle = ctx.fillStyle = "rgba(255,58,58,0.5)";
+    ctx.strokeStyle = ctx.fillStyle = paintStroke.restore ? "rgba(70,220,120,0.5)" : "rgba(255,58,58,0.5)";
     ctx.lineCap = ctx.lineJoin = "round";
     ctx.lineWidth = paintStroke.r * 2 * view.s;
     const p0 = paintStroke.pts[0];
@@ -168,6 +184,11 @@ function draw() {
     else { ctx.beginPath(); ctx.moveTo(dx + p0[0] * view.s, dy + p0[1] * view.s); for (const p of paintStroke.pts) ctx.lineTo(dx + p[0] * view.s, dy + p[1] * view.s); ctx.stroke(); }
     ctx.restore();
   }
+}
+function srcCenter(st, off) {
+  let x = 0, y = 0; for (const p of st.pts) { x += p[0]; y += p[1]; }
+  x /= st.pts.length; y /= st.pts.length;
+  return [x + off[0], y + off[1], x, y];
 }
 function scheduleRegion() {
   clearTimeout(regionTimer);
@@ -179,12 +200,12 @@ function scheduleRegion() {
     const x0 = clamp(Math.floor(-view.tx / view.s), 0, img.w), y0 = clamp(Math.floor(-view.ty / view.s), 0, img.h);
     const x1 = clamp(Math.ceil((cssW - view.tx) / view.s), 0, img.w), y1 = clamp(Math.ceil((cssH - view.ty) / view.s), 0, img.h);
     if (x1 - x0 < 4 || y1 - y0 < 4) return;
-    if (region && region.v === version && region.mask === showMask) {
+    if (region && region.v === version && region.mask === showMask && region.vis === visSpots) {
       const r = region.rect;
       if (r.x <= x0 + 1 && r.y <= y0 + 1 && r.x + r.w >= x1 - 1 && r.y + r.h >= y1 - 1 && r.w / region.after.width <= 1 / devPerFull * 1.3 + 0.01) return;
     }
     regionBusy = true;
-    W.postMessage({ type: "region", P, mask: showMask, id: version, rect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, maxOut: Math.min(2400, Math.max(cv.width, cv.height)) });
+    W.postMessage({ type: "region", P, mask: showMask, vis: visSpots, id: version, rect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, maxOut: Math.min(2400, Math.max(cv.width, cv.height)) });
   }, 220);
 }
 
@@ -197,7 +218,14 @@ cv.addEventListener("pointerdown", (e) => {
   ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
   if (ptrs.size === 1 && tool === "heal" && !(split && Math.abs(e.offsetX - splitX * cssW) < 26)) {
     const fx = (e.offsetX - view.tx) / view.s, fy = (e.offsetY - view.ty) / view.s;
-    paintStroke = { r: brushSize / 2 / view.s, pts: [[fx, fy]] };
+    const si = P.strokes.length - 1;
+    if (si >= 0 && srcOffs[si] && healMode !== "restore") {
+      const st = P.strokes[si], off = st.off || srcOffs[si], c = srcCenter(st, off);
+      if (Math.hypot((c[0] - fx) * view.s, (c[1] - fy) * view.s) < Math.max(28, st.r * view.s)) {
+        gest = { type: "src", x0: e.offsetX, y0: e.offsetY, off0: off.slice() }; return;
+      }
+    }
+    paintStroke = { r: brushSize / 2 / view.s, pts: [[fx, fy]], restore: healMode === "restore" };
     gest = { type: "paint" };
     draw();
     return;
@@ -214,6 +242,12 @@ cv.addEventListener("pointerdown", (e) => {
 cv.addEventListener("pointermove", (e) => {
   if (!ptrs.has(e.pointerId) || !gest) return;
   ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (gest.type === "src") {
+    const si = P.strokes.length - 1, st = Object.assign({}, P.strokes[si]);
+    st.off = [Math.round(gest.off0[0] + (e.offsetX - gest.x0) / view.s), Math.round(gest.off0[1] + (e.offsetY - gest.y0) / view.s)];
+    P.strokes = P.strokes.slice(0, si).concat([st]); srcOffs[si] = st.off; draw();
+    return;
+  }
   if (gest.type === "paint" && paintStroke) {
     const fx = (e.offsetX - view.tx) / view.s, fy = (e.offsetY - view.ty) / view.s, l = paintStroke.pts[paintStroke.pts.length - 1];
     if (Math.hypot(fx - l[0], fy - l[1]) > paintStroke.r * 0.3) { paintStroke.pts.push([fx, fy]); draw(); }
@@ -233,11 +267,14 @@ cv.addEventListener("pointermove", (e) => {
 const endPtr = (e) => {
   if (!ptrs.has(e.pointerId)) return;
   ptrs.delete(e.pointerId);
+  if (gest && gest.type === "src" && ptrs.size === 0) { gest = null; commit(); requestRender(); return; }
   if (gest && gest.type === "paint" && ptrs.size === 0) {
     if (paintStroke) {
       const st = { r: Math.round(paintStroke.r * 10) / 10, pts: paintStroke.pts.map(([x, y]) => [Math.round(x), Math.round(y)]) };
+      if (healMode === "clone") st.mode = "clone";
       paintStroke.done = true;
-      P.strokes = [...P.strokes, st]; commit(); requestRender(); updateToolDots();
+      if (paintStroke.restore) P.restores = [...P.restores, st]; else P.strokes = [...P.strokes, st];
+      commit(); requestRender(); updateToolDots();
       if (tool === "heal") renderPanel();
     }
     gest = null; return;
@@ -505,7 +542,7 @@ function applyAuto(amt, doCommit = true) {
 /* ---------- Werkzeuge ---------- */
 const TOOLS = [
   { id: "auto", label: "Auto", icon: "i-auto" },
-  { id: "heal", label: "Entfernen", icon: "i-heal", keys: ["strokes"], face: false },
+  { id: "heal", label: "Entfernen", icon: "i-heal", keys: ["strokes", "restores"], face: false },
   { id: "blem", label: "Pickel", icon: "i-blem", keys: ["blemish"], face: true },
   { id: "marks", label: "Flecken", icon: "i-marks", keys: ["marks"], face: true },
   { id: "skin", label: "Haut", icon: "i-skin", keys: ["skin"], face: true },
@@ -537,6 +574,8 @@ function updateToolDots() {
   }
 }
 function selectTool(id) {
+  if (visSpots && id !== "heal") { visSpots = false; region = null; requestRender(); }
+  setTimeout(draw, 0);
   if (tool === "blem" && id !== "blem" && blemMode !== "auto") { blemMode = "auto"; }
   tool = id;
   for (const b of $("tools").children) b.classList.toggle("sel", b.dataset.id === id);
@@ -608,21 +647,26 @@ function renderPanel() {
       break;
     }
     case "heal": {
-      const n = P.strokes.length;
-      p.append(head("Entfernen", n ? `<b>${n}</b> ${n === 1 ? "Stelle" : "Stellen"}` : ""), desc("Mit einem Finger über die Stelle wischen. Sie wird rot markiert und beim Loslassen entfernt. Zoomen mit zwei Fingern."));
+      const n = P.strokes.length, nr = P.restores.length;
+      p.append(head("Entfernen", (n ? `<b>${n}</b> entfernt` : "") + (nr ? ` · <b>${nr}</b> geschützt` : "")));
+      p.append(seg([["heal", "Reparieren"], ["clone", "Klonen"], ["restore", "Schützen"]], healMode, (v) => { healMode = v; renderPanel(); draw(); }));
+      p.append(desc({ heal: "Über die Stelle wischen. Den weißen Punkt ziehen, um die Quelle zu verschieben.", clone: "Kopiert die Quelle 1:1 ohne Angleichen. Weißen Punkt ziehen für eine andere Quelle.", restore: "Über Bereiche wischen, die die Auto Retusche nicht anfassen soll, z. B. Sommersprossen." }[healMode]));
       const row = document.createElement("div"); row.className = "row";
       const g = document.createElement("div"); g.className = "grow";
-      g.append(slider(null, "Pinselgröße", { min: 12, max: 160, get: () => brushSize, set: (v) => (brushSize = v), unit: " px", def: 44, noRender: true, noCommit: true, compact: true }));
-      const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Letzte löschen"; del.disabled = !n;
-      del.onclick = () => { if (!P.strokes.length) return; P.strokes = P.strokes.slice(0, -1); commit(); requestRender(); renderPanel(); updateToolDots(); };
-      row.append(g, del);
+      g.append(slider(null, "Pinsel", { min: 12, max: 160, get: () => brushSize, set: (v) => (brushSize = v), unit: " px", def: 44, noRender: true, noCommit: true, compact: true }));
+      const vis = document.createElement("button"); vis.className = "ghost" + (visSpots ? " gold" : ""); vis.innerHTML = `<svg><use href="#i-before"/></svg>Sichtbar`;
+      vis.onclick = () => { visSpots = !visSpots; region = null; requestRender(); renderPanel(); toast(visSpots ? "Flecken sichtbar: helle und dunkle Punkte sind Unreinheiten" : "Normale Ansicht"); };
+      const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Letzte"; del.disabled = !(healMode === "restore" ? nr : n);
+      del.onclick = () => { if (healMode === "restore") P.restores = P.restores.slice(0, -1); else P.strokes = P.strokes.slice(0, -1); commit(); requestRender(); renderPanel(); updateToolDots(); };
+      row.append(g, vis, del);
       p.append(row);
-      break;
+      p.style.gap = "8px";
+      return;
     }
     case "blem": {
       p.append(head("Pickel & Unreinheiten", ""));
       p.append(seg([["auto", "Automatisch"], ["tap", "Antippen"], ["keep", "Behalten"]], blemMode, (v) => { blemMode = v; if (v !== "auto" && !showMask) setMask(true); renderPanel(); }));
-      if (blemMode === "auto") p.append(slider("blemish", "Empfindlichkeit", { unit: " %" }));
+      if (blemMode === "auto") { p.append(slider("blemish", "Empfindlichkeit", { unit: " %", compact: true }), slider("blemFade", "Deckkraft", { unit: " %", compact: true, def: 100 })); p.style.gap = "6px"; updateMeta(); return; }
       else if (blemMode === "tap") p.append(desc("Tippe auf weitere Stellen, um sie zu entfernen. Schon markierte Stellen bleiben markiert. Rückgängig oben links."));
       else p.append(desc("Tippe auf eine erkannte Stelle (pink), die bleiben soll, z. B. ein Leberfleck oder Muttermal."));
       updateMeta();

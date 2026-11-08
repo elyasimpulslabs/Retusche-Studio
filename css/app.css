@@ -74,7 +74,7 @@ html { height: 100%; }
 
 /* Dock */
 .dock { flex: none; background: var(--panel); border-top: 1px solid var(--line); padding-bottom: var(--safe-b); z-index: 4; }
-.panel { height: 158px; padding: 14px 16px 6px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.panel { height: 180px; padding: 12px 16px 6px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -.005em; }
 .panel-head .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }

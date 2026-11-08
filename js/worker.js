@@ -1,5 +1,5 @@
 /* Retusche Studio Rechen Worker. © 2026 Elyas Saciri (Ervin Saciri). */
-import * as E from "./engine.js";
+import * as E from "./engine.js?v=5";
 import jpegEncode from "../lib/jpeg/encoder.js";
 import jpegDecode from "../lib/jpeg/decoder.js";
 
@@ -9,6 +9,7 @@ let full = null, prev = null, faces = [], G = { noise: 0, longEdge: 0 }, lastBle
 const post = (type, data, transfer) => self.postMessage(Object.assign({ type }, data), transfer || []);
 
 const patchCache = new Map();
+let lastOffs = "", lastRestore = "";
 function ensureStrokes(P) {
   const list = P.strokes || [];
   G.patches = list.map((st) => {
@@ -16,6 +17,10 @@ function ensureStrokes(P) {
     if (!patchCache.has(key)) patchCache.set(key, E.buildPatch(full, st));
     return patchCache.get(key);
   });
+  const offs = G.patches.map((p) => (p && p.off ? p.off : null)), ok = JSON.stringify(offs);
+  if (ok !== lastOffs) { lastOffs = ok; post("patchinfo", { offs }); }
+  const rk = JSON.stringify(P.restores || []);
+  if (rk !== lastRestore) { lastRestore = rk; G.restore = E.buildRestore(full.w, full.h, P.restores); }
   if (patchCache.size > 200) { const keep = new Set(list.map((st) => JSON.stringify(st))); for (const k of patchCache.keys()) if (!keep.has(k)) patchCache.delete(k); }
 }
 function blemKey(P) { return P.blemish + "|" + (P.marks || 0) + "|" + JSON.stringify(P.spots || []); }
@@ -55,7 +60,7 @@ function rotateRGB(img, orient) {
 function setImage(img) {
   full = { w: img.w, h: img.h, data: img.data, k: 1 };
   prev = E.downscaleImage(full, PREVIEW_EDGE);
-  faces = []; lastBlem = null; patchCache.clear();
+  faces = []; lastBlem = null; patchCache.clear(); lastOffs = ""; lastRestore = "";
   G = { noise: E.estimateNoise(full), longEdge: Math.max(full.w, full.h) };
   const rgba = new Uint8ClampedArray(prev.w * prev.h * 4);
   for (let i = 0, o = 0; i < prev.w * prev.h; i++, o += 4) { rgba[o] = prev.data[i * 3]; rgba[o + 1] = prev.data[i * 3 + 1]; rgba[o + 2] = prev.data[i * 3 + 2]; rgba[o + 3] = 255; }
@@ -96,7 +101,7 @@ self.onmessage = async (ev) => {
       post("analyzed", { n: faces.length, teeth: faces.some((F) => F.teeth) });
     } else if (m.type === "render") {
       ensureBlemishes(m.P); ensureStrokes(m.P);
-      const pl = E.renderRegion(prev, 0, 0, prev.w, prev.h, m.P, faces, G, { mask: m.mask });
+      const pl = E.renderRegion(prev, 0, 0, prev.w, prev.h, m.P, faces, G, { mask: m.mask, vis: m.vis });
       const rgba = toRGBA(pl, prev.w, prev.h);
       post("rendered", { id: m.id, w: prev.w, h: prev.h, rgba }, [rgba.buffer]);
     } else if (m.type === "region") {
@@ -118,7 +123,7 @@ self.onmessage = async (ev) => {
         rx = 0; ry = 0; rw = dw; rh = dh;
       }
       const shifted = src.ox !== undefined ? faces.map((F) => Object.assign(Object.create(F), { cx0: F.cx0 - src.ox, cy0: F.cy0 - src.oy })) : faces;
-      const pl = E.renderRegion(src, rx, ry, rw, rh, m.P, shifted, G, { mask: m.mask });
+      const pl = E.renderRegion(src, rx, ry, rw, rh, m.P, shifted, G, { mask: m.mask, vis: m.vis });
       const before = new Uint8ClampedArray(rw * rh * 4);
       for (let yy = 0; yy < rh; yy++) for (let xx = 0; xx < rw; xx++) {
         const s = ((ry + yy) * src.w + rx + xx) * 3, o = (yy * rw + xx) * 4;

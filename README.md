@@ -8,7 +8,10 @@ Porträt Retusche auf dem iPhone, so wie ein Retuscheur in Photoshop arbeitet. P
 
 * **Gesichtserkennung** mit 68 Punkten: Augen, Brauen, Lippen, Nasenlöcher, Bart und Haare werden automatisch ausgespart
 * **Pickel & Unreinheiten:** findet kleine dunkle, rote oder helle Stellen (auch Mitesser), die in allen Richtungen von Haut umgeben sind. Falten, Kanten und Schatten bleiben. Repariert wird wie mit dem Reparaturpinsel: Farbe aus der Haut daneben, Poren bleiben
-* **Entfernen Pinsel wie in Lightroom:** mit dem Finger über eine Stelle wischen, sie wird rot markiert und beim Loslassen entfernt. Die App sucht automatisch eine passende Quelle daneben und gleicht Farbe und Helligkeit nahtlos an
+* **Entfernen Pinsel wie in Lightroom:** mit dem Finger über eine Stelle wischen, sie wird rot markiert und beim Loslassen entfernt. Die App sucht automatisch eine passende Quelle daneben und gleicht Farbe und Helligkeit nahtlos an. Modi Reparieren und Klonen, Quelle mit dem Finger verschiebbar
+* **Schützen Pinsel:** Bereiche, die die Auto Retusche nicht anfassen soll (z. B. Sommersprossen)
+* **Flecken sichtbar machen:** Schwarz Weiß Ansicht, in der Unreinheiten deutlich hervortreten (wie Visualize Spots)
+* **Deckkraft** für Pickel und Flecken, um die Retusche natürlicher zu halten
 * **Antippen:** weitere Stellen antippen zum Entfernen (bereits markierte bleiben markiert). Modus **Behalten** für Leberflecke und Muttermale
 * **Dunkle Flecken:** Pigmentflecken und Aknemale werden in Helligkeit und Farbe angeglichen, die Struktur bleibt
 * **Haut glätten:** Frequenztrennung in drei Bändern, beruhigt nur die mittleren Frequenzen. Die feine Struktur wird nie angefasst
