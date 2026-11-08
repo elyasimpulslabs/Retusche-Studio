@@ -287,6 +287,8 @@ export function analyzeFace(img, lmFull, idx) {
   for (const [i0, i1] of [[17, 21], [22, 26]]) for (let i = i0; i < i1; i++) capsule(feat, aw, ah, Lp(i), Lp(i + 1), fw * 0.03);
   fillPoly(feat, aw, ah, scalePoly(lipsOuter, 1.08));
   capsule(feat, aw, ah, Lp(31), Lp(35), fw * 0.03);
+  // Nasenflügel (Lp 31 und 35 sind die Flügelansätze) samt Falte zur Wange
+  for (const [i, j] of [[31, 2], [35, 14]]) { const a = Lp(i), b = Lp(j), q = [a[0] + (b[0] - a[0]) * 0.12, a[1] + (b[1] - a[1]) * 0.12]; capsule(feat, aw, ah, Lp(i === 31 ? 32 : 34), q, fw * 0.035); }
   // Größere Sperrzone nur für die Pickelsuche (Nasenlöcher, Augenwinkel, Lippenrand, Brauen)
   featBig.set(feat);
   fillPoly(featBig, aw, ah, scalePoly(eyeL, 2.1)); fillPoly(featBig, aw, ah, scalePoly(eyeR, 2.1));
@@ -548,6 +550,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
   const S = sampler(F);
   const amS = P.skin / 100, amT = P.tone / 100, amE = P.eyes / 100, amZ = P.teeth / 100;
   const doTeeth = F.teeth && amZ > 0;
+  const texK = ((P.texture ?? 100) - 100) / 100;
   const fadeB = (P.blemFade ?? 100) / 100, fadeP = (P.blemFade ?? 100) / 100;
   for (let y = ty0; y < ty1; y++) {
     const fy = (y + 0.5) * k, ay = (fy - F.cy0) / F.ay - 0.5;
@@ -568,7 +571,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
         const b1 = B1[c][so], h = S(F.H[c], ax, ay), b2 = S(F.B2[c], ax, ay);
         const fn = O[c] - b1;
         const b1h = b1 + mb * (h - b1);
-        fine[c] = fn * (1 - 0.55 * mb);
+        fine[c] = fn * (1 - 0.55 * mb) * (1 + texK * sk);
         mid[c] = (b1h - b2) * (1 - amS * 0.9 * sk);
         low[c] = b2;
       }
