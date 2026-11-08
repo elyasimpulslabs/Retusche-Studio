@@ -20,7 +20,7 @@ const exp = { maxEdge: 0, quality: 95 };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
 /* ---------- Worker ---------- */
-const W = new Worker(new URL("./worker.js?v=7", import.meta.url), { type: "module" });
+const W = new Worker(new URL("./worker.js?v=8", import.meta.url), { type: "module" });
 let rendering = false, dirty = false, version = 0, regionTimer = 0, regionBusy = false;
 let afterCanvas = document.createElement("canvas"), beforeCanvas = document.createElement("canvas");
 let region = null;

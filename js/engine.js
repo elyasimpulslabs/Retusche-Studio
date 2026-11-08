@@ -260,7 +260,7 @@ export function analyzeFace(img, lmFull, idx) {
   ];
   const mY = median(samples.map((i) => Y[i])), mCb = median(samples.map((i) => Cb[i])), mCr = median(samples.map((i) => Cr[i]));
   const mad = (vals, m) => median(vals.map((v) => Math.abs(v - m))) * 1.4826;
-  const sCb = Math.max(3.5, mad(samples.map((i) => Cb[i]), mCb)), sCr = Math.max(3.5, mad(samples.map((i) => Cr[i]), mCr));
+  const sCb = clamp(mad(samples.map((i) => Cb[i]), mCb), 3.5, 9), sCr = clamp(mad(samples.map((i) => Cr[i]), mCr), 3.5, 9);
 
   // Regionen
   const faceReg = new Float32Array(n), neckReg = new Float32Array(n), feat = new Float32Array(n), featBig = new Float32Array(n);
@@ -316,6 +316,7 @@ export function analyzeFace(img, lmFull, idx) {
     const dcb = (Cb[i] - mCb) / (sCb * 4), dcr = (Cr[i] - mCr) / (sCr * 4);
     let col = Math.exp(-0.5 * (dcb * dcb + dcr * dcr));
     col *= smooth(mY * 0.28, mY * 0.5, Y[i]);
+    col *= smooth(1, 7, Cr[i]) * (1 - smooth(-3, 4, Cb[i])); // Haut ist immer warm: Blau, Grau, Weiß sind nie Haut
     const texOk = 1 - smooth(0.06, 0.11, texS[i] / Math.max(20, mY));
     const reg = Math.max(faceS[i], neckS[i] * 0.85 * texOk);
     skin[i] = clamp(reg * Math.pow(col, 0.55) * (1 - featS[i]), 0, 1); // weicher Farbtest: auch Schatten und Bartansatz gehören zur Haut
