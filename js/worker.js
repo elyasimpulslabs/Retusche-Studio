@@ -8,14 +8,24 @@ let full = null, prev = null, faces = [], G = { noise: 0, longEdge: 0 }, lastBle
 
 const post = (type, data, transfer) => self.postMessage(Object.assign({ type }, data), transfer || []);
 
-function blemKey(P) { return P.blemish + "|" + JSON.stringify(P.spots || []); }
+const patchCache = new Map();
+function ensureStrokes(P) {
+  const list = P.strokes || [];
+  G.patches = list.map((st) => {
+    const key = JSON.stringify(st);
+    if (!patchCache.has(key)) patchCache.set(key, E.buildPatch(full, st));
+    return patchCache.get(key);
+  });
+  if (patchCache.size > 200) { const keep = new Set(list.map((st) => JSON.stringify(st))); for (const k of patchCache.keys()) if (!keep.has(k)) patchCache.delete(k); }
+}
+function blemKey(P) { return P.blemish + "|" + (P.marks || 0) + "|" + JSON.stringify(P.spots || []); }
 function ensureBlemishes(P) {
   const key = blemKey(P);
   if (key === lastBlem) return;
-  let count = 0;
-  for (const F of faces) count += E.updateBlemishes(F, P.blemish / 100, P.spots);
+  let count = 0, marks = 0;
+  for (const F of faces) { E.updateBlemishes(F, P.blemish / 100, P.spots, (P.marks || 0) / 100); count += F.count; marks += F.countP; }
   lastBlem = key;
-  post("count", { count });
+  post("count", { count, marks });
 }
 
 function toRGBA(pl, w, h) { return E.planarToRGBA(pl, w, h); }
@@ -45,7 +55,7 @@ function rotateRGB(img, orient) {
 function setImage(img) {
   full = { w: img.w, h: img.h, data: img.data, k: 1 };
   prev = E.downscaleImage(full, PREVIEW_EDGE);
-  faces = []; lastBlem = null;
+  faces = []; lastBlem = null; patchCache.clear();
   G = { noise: E.estimateNoise(full), longEdge: Math.max(full.w, full.h) };
   const rgba = new Uint8ClampedArray(prev.w * prev.h * 4);
   for (let i = 0, o = 0; i < prev.w * prev.h; i++, o += 4) { rgba[o] = prev.data[i * 3]; rgba[o + 1] = prev.data[i * 3 + 1]; rgba[o + 2] = prev.data[i * 3 + 2]; rgba[o + 3] = 255; }
@@ -85,12 +95,12 @@ self.onmessage = async (ev) => {
       lastBlem = null;
       post("analyzed", { n: faces.length, teeth: faces.some((F) => F.teeth) });
     } else if (m.type === "render") {
-      ensureBlemishes(m.P);
+      ensureBlemishes(m.P); ensureStrokes(m.P);
       const pl = E.renderRegion(prev, 0, 0, prev.w, prev.h, m.P, faces, G, { mask: m.mask });
       const rgba = toRGBA(pl, prev.w, prev.h);
       post("rendered", { id: m.id, w: prev.w, h: prev.h, rgba }, [rgba.buffer]);
     } else if (m.type === "region") {
-      ensureBlemishes(m.P);
+      ensureBlemishes(m.P); ensureStrokes(m.P);
       // Ausschnitt in Originalpixeln, Ausgabe höchstens 1:1
       const { x, y, w, h } = m.rect;
       const scale = Math.min(1, m.maxOut / Math.max(w, h));
@@ -118,10 +128,10 @@ self.onmessage = async (ev) => {
       const ox = src.ox !== undefined ? src.ox : 0, oy = src.oy !== undefined ? src.oy : 0;
       post("region", { id: m.id, rect: { x: ox + rx * src.k, y: oy + ry * src.k, w: rw * src.k, h: rh * src.k }, w: rw, h: rh, rgba, before }, [rgba.buffer, before.buffer]);
     } else if (m.type === "tap") {
-      const r = E.toggleSpot(faces, m.spots, m.x, m.y);
+      const r = E.toggleSpot(faces, m.spots, m.x, m.y, m.mode);
       post("spots", r);
     } else if (m.type === "export") {
-      ensureBlemishes(m.P);
+      ensureBlemishes(m.P); ensureStrokes(m.P);
       let src = full;
       if (m.maxEdge && Math.max(full.w, full.h) > m.maxEdge) {
         post("progress", { label: "Größe wird angepasst", p: 0.02 });
@@ -140,6 +150,7 @@ self.onmessage = async (ev) => {
     } else if (m.type === "crop") {
       // Ausschnitt in Originalauflösung (für KI Vorschau)
       const { x, y, w, h } = m.rect;
+      ensureStrokes(m.P);
       const pl = E.renderRegion(full, x, y, w, h, m.P, faces, G);
       const rgba = toRGBA(pl, w, h);
       post("crop", { w, h, rgba }, [rgba.buffer]);

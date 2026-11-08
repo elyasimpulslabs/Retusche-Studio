@@ -364,6 +364,30 @@ export function analyzeFace(img, lmFull, idx) {
     score[i] = Math.max(zd, zr * 0.9, zb, 0.6 * (zd + zr * 0.9));
   }
 
+  // Dunkle Flecken (Pigmentflecken, Aknemale): größer und flacher als Pickel, nur dunkler als die Haut rundherum
+  const Yp = gauss(Y, aw, ah, 3 * s);
+  const RP = [12 * s, 20 * s, 30 * s];
+  const pA = new Float32Array(n), sp = [];
+  const featHuge = grow(featBig, aw, ah, fw * 0.05, 0);
+  for (let y = 0; y < ah; y++) for (let x = 0; x < aw; x++) {
+    const i = y * aw + x;
+    if (!allow[i] || featHuge[i] > 0.15) continue;
+    let bp = -1;
+    for (const R of RP) {
+      for (let k = 0; k < 8; k++) {
+        const xx = Math.min(aw - 1, Math.max(0, Math.round(x + DIRS[k][0] * R))), yy = Math.min(ah - 1, Math.max(0, Math.round(y + DIRS[k][1] * R)));
+        RV[k] = Yp[yy * aw + xx];
+      }
+      RV.sort();
+      bp = Math.max(bp, (RV[2] - Yp[i]) / Math.max(20, RV[2]));
+    }
+    pA[i] = bp;
+    if ((i & 3) === 0) sp.push(bp);
+  }
+  const [mdP, sdP] = stat(sp);
+  const scoreP = new Float32Array(n);
+  for (let i = 0; i < n; i++) if (allow[i] && pA[i] > 0.035) scoreP[i] = (pA[i] - mdP) / Math.max(sdP, 0.01);
+
   // Augen und Zähne
   const eye = new Float32Array(n);
   fillPoly(eye, aw, ah, scalePoly(eyeL, 1.05)); fillPoly(eye, aw, ah, scalePoly(eyeR, 1.05));
@@ -384,6 +408,7 @@ export function analyzeFace(img, lmFull, idx) {
   return {
     idx, cx0, cy0, cw, ch, aw, ah, ax, ay, s, fw, faceWFull: faceW, A, Y,
     stats: { mdD, sdD, mdR, sdR, mdB, sdB }, dA, rA,
+    scoreP, labelP: new Int32Array(n), mp: null, PD: null,
     skin: skinS, score, allow, eye: eyeS, teeth: teethS, mouthY, mY,
     label: new Int32Array(n), comps: [], mb: new Float32Array(n), H: null, B2: null, B3: null,
     lm: lmFull, box: [cx0, cy0, cw, ch]
@@ -391,7 +416,7 @@ export function analyzeFace(img, lmFull, idx) {
 }
 
 /* Pickel Maske aus Empfindlichkeit + manuellen Punkten neu berechnen (schnell) */
-export function updateBlemishes(F, sens, spots) {
+export function updateBlemishes(F, sens, spots, sensP = 0) {
   const { aw, ah, s, score, allow, label } = F, n = aw * ah;
   const T = 7.5 - 5.0 * sens; // z Schwelle, sens 0..1
   label.fill(0);
@@ -448,7 +473,45 @@ export function updateBlemishes(F, sens, spots) {
   F.B2 = Ah.map((c) => gauss(c, aw, ah, 6 * s));
   const wsk = new Float32Array(n); for (let i = 0; i < n; i++) wsk[i] = F.skin[i] > 0.25 ? F.skin[i] : 0;
   F.B3 = normConv(Ah, wsk, aw, ah, 18 * s, F.B2);
-  return F.count;
+  // Dunkle Flecken: nur tiefe Frequenzen angleichen, Struktur bleibt vollständig
+  F.countP = 0; F.mp = null; F.PD = null;
+  if (sensP > 0.001) {
+    const TP = 7.5 - 5.0 * sensP, gP = TP * 0.5, lab = F.labelP, sc = F.scoreP;
+    lab.fill(0);
+    const maxP = Math.PI * (32 * s) ** 2, hardP = new Float32Array(n);
+    let id = 0;
+    for (let i = 0; i < n; i++) {
+      if (lab[i] || sc[i] < TP || !allow[i]) continue;
+      id++;
+      let sp = 0, area = 0, x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
+      const members = [];
+      stack[sp++] = i; lab[i] = id;
+      while (sp) {
+        const p = stack[--sp], x = p % aw, y = (p / aw) | 0;
+        area++; members.push(p);
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (area > maxP * 1.5) continue;
+        const nb = [x > 0 ? p - 1 : -1, x < aw - 1 ? p + 1 : -1, p - aw, p + aw];
+        for (const q of nb) if (q >= 0 && q < n && !lab[q] && allow[q] && sc[q] >= gP) { lab[q] = id; stack[sp++] = q; }
+      }
+      const ext = Math.max(x1 - x0 + 1, y1 - y0 + 1);
+      if (area <= maxP && area >= Math.PI * (2.5 * s) ** 2 && (ext * ext) / area < 10) { for (const m of members) hardP[m] = 1; F.countP++; }
+    }
+    if (F.countP) {
+      const keep = grow(hardP, aw, ah, 4 * s, 0);
+      const wP = new Float32Array(n);
+      for (let i = 0; i < n; i++) wP[i] = F.skin[i] > 0.3 ? F.skin[i] * (1 - Math.min(1, keep[i])) : 0;
+      const Hp = normConv(Ah, wP, aw, ah, 12 * s, F.B2);
+      const mp = grow(hardP, aw, ah, 2.5 * s, 3.5 * s);
+      F.mp = mp;
+      F.PD = Ah.map((c, k) => {
+        const L = gauss(c, aw, ah, 4 * s), d = new Float32Array(n), h = Hp[k];
+        for (let i = 0; i < n; i++) { const m = Math.min(1, mp[i]) * (F.skin[i] > 0.2 ? 1 : F.skin[i] * 5); d[i] = m * (h[i] - L[i]); }
+        return gauss(d, aw, ah, 2 * s);
+      });
+    }
+  }
+  return F.count + F.countP;
 }
 
 /* ---------- Rendern ---------- */
@@ -483,7 +546,8 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap) {
       const fx = (x + 0.5) * k, ax = (fx - F.cx0) / F.ax - 0.5;
       const sk = S(F.skin, ax, ay), mb = S(F.mb, ax, ay), ey = amE > 0 ? S(F.eye, ax, ay) : 0;
       const th = doTeeth ? S(F.teeth, ax, ay) : 0;
-      if (sk < 0.002 && mb < 0.002 && ey < 0.002 && th < 0.002) continue;
+      const mpv = F.mp ? S(F.mp, ax, ay) : 0;
+      if (sk < 0.002 && mb < 0.002 && ey < 0.002 && th < 0.002 && mpv < 0.002) continue;
       const so = (y - ey0) * ew + (x - ex0), po = (y - ry) * rw + (x - rx);
       if (skinMap && sk > skinMap[po]) skinMap[po] = sk;
       const O = [sub[0][so], sub[1][so], sub[2][so]];
@@ -507,6 +571,7 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap) {
         low[0] = Yn + 1.402 * crn; low[1] = Yn - 0.344136 * cbn - 0.714136 * crn; low[2] = Yn + 1.772 * cbn;
       }
       for (let c = 0; c < 3; c++) out[c] = low[c] + mid[c] + fine[c];
+      if (F.PD) for (let c = 0; c < 3; c++) out[c] += S(F.PD[c], ax, ay);
       if (ey > 0.002) {
         const Y = luma(out[0], out[1], out[2]);
         const lift = amE * ey * 0.5 * Y * (1 - Math.min(255, Y) / 255);
@@ -609,6 +674,7 @@ export function renderRegion(src, rx, ry, rw, rh, P, faces, G, opts = {}) {
     let si = ((ry + y) * W + rx) * 3, o = y * rw;
     for (let x = 0; x < rw; x++, si += 3, o++) { pl[0][o] = d[si]; pl[1][o] = d[si + 1]; pl[2][o] = d[si + 2]; }
   }
+  applyPatches(pl, rx, ry, rw, rh, k, src.ox || 0, src.oy || 0, G.patches);
   denoise(pl, rw, rh, P.denoise / 100, G.noise / Math.max(1, k), k);
   const skinMap = new Float32Array(n);
   if (faces) for (const F of faces) if (F.H) synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap);
@@ -631,6 +697,8 @@ function overlayMask(pl, rx, ry, rw, rh, k, faces) {
         const ax = ((x + 0.5) * k - F.cx0) / F.ax - 0.5, o = (y - ry) * rw + (x - rx);
         const sk = S(F.skin, ax, ay) * 0.42, mb = Math.min(1, S(F.mb, ax, ay) * 1.4);
         if (sk > 0.002) { pl[0][o] += (214 - pl[0][o]) * sk; pl[1][o] += (178 - pl[1][o]) * sk; pl[2][o] += (110 - pl[2][o]) * sk; }
+        const mpv = F.mp ? Math.min(1, S(F.mp, ax, ay)) : 0;
+        if (mpv > 0.2) { const m = mpv * 0.55; pl[0][o] += (150 - pl[0][o]) * m; pl[1][o] += (95 - pl[1][o]) * m; pl[2][o] += (255 - pl[2][o]) * m; }
         if (mb > 0.15) { const m = mb * 0.85; pl[0][o] += (255 - pl[0][o]) * m; pl[1][o] += (40 - pl[1][o]) * m; pl[2][o] += (140 - pl[2][o]) * m; }
       }
     }
@@ -664,38 +732,123 @@ export function renderFull(src, P, faces, G, onProgress) {
   return out;
 }
 
-/* Tippen: Fleck hinzufügen oder entfernen. Gibt neue Punktliste zurück */
-export function toggleSpot(faces, spots, fx, fy) {
+/* Tippen. mode "add": Stelle entfernen (nie rückgängig, bereits markierte bleiben markiert).
+ * mode "keep": erkannte Stelle behalten bzw. eigene Markierung wieder aufheben. */
+export function toggleSpot(faces, spots, fx, fy, mode = "add") {
   spots = (spots || []).slice();
-  // bestehenden manuellen Punkt treffen?
-  for (let i = spots.length - 1; i >= 0; i--) {
-    const p = spots[i];
-    if (Math.hypot(p.x - fx, p.y - fy) <= Math.max(p.r * 1.3, 4)) { spots.splice(i, 1); return { spots, action: p.m === "a" ? "removed" : "restored" }; }
-  }
-  // nächstes Gesicht
   let best = null, bd = Infinity;
   for (const F of faces) {
     const cx = F.cx0 + F.cw / 2, cy = F.cy0 + F.ch / 2, dd = Math.hypot(cx - fx, cy - fy);
     if (dd < bd) { bd = dd; best = F; }
   }
   const r = best ? best.faceWFull * 0.022 : 12;
-  // automatisch erkannter Fleck?
+  const hitSpot = (m) => { for (let i = spots.length - 1; i >= 0; i--) { const p = spots[i]; if (p.m === m && Math.hypot(p.x - fx, p.y - fy) <= Math.max(p.r * 1.3, 4)) return i; } return -1; };
+  let comp = null;
   if (best && best.H) {
     const ax = Math.round((fx - best.cx0) / best.ax), ay = Math.round((fy - best.cy0) / best.ay);
-    if (ax >= 0 && ay >= 0 && ax < best.aw && ay < best.ah) {
-      const rr = Math.max(2, Math.round(r / best.ax * 0.6));
-      for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
-        const x = ax + dx, y = ay + dy;
-        if (x < 0 || y < 0 || x >= best.aw || y >= best.ah) continue;
-        const l = best.label[y * best.aw + x];
-        if (l && best.comps[l - 1] && best.comps[l - 1].ok) {
-          const c = best.comps[l - 1];
-          spots.push({ x: best.cx0 + c.x * best.ax, y: best.cy0 + c.y * best.ay, r: Math.max(r * 0.5, c.rad * best.ax), m: "r" });
-          return { spots, action: "kept" };
-        }
+    const rr = Math.max(2, Math.round((r / best.ax) * 0.6));
+    for (let dy = -rr; dy <= rr && !comp; dy++) for (let dx = -rr; dx <= rr; dx++) {
+      const x = ax + dx, y = ay + dy;
+      if (x < 0 || y < 0 || x >= best.aw || y >= best.ah) continue;
+      const l = best.label[y * best.aw + x];
+      if (l && best.comps[l - 1] && best.comps[l - 1].ok) { comp = best.comps[l - 1]; break; }
+    }
+  }
+  if (mode === "keep") {
+    const ia = hitSpot("a"); if (ia >= 0) { spots.splice(ia, 1); return { spots, action: "unmarked" }; }
+    const ir = hitSpot("r"); if (ir >= 0) return { spots, action: "alreadyKept" };
+    if (comp) { spots.push({ x: best.cx0 + comp.x * best.ax, y: best.cy0 + comp.y * best.ay, r: Math.max(r * 0.5, comp.rad * best.ax), m: "r" }); return { spots, action: "kept" }; }
+    return { spots, action: "nothing" };
+  }
+  // add: eine behaltene Stelle wird durch Antippen wieder entfernt, sonst nur hinzufügen
+  const ir = hitSpot("r"); if (ir >= 0) { spots.splice(ir, 1); return { spots, action: "restored" }; }
+  if (comp || hitSpot("a") >= 0) return { spots, action: "already" };
+  spots.push({ x: fx, y: fy, r, m: "a" });
+  return { spots, action: "added" };
+}
+
+/* ---------- Entfernen Pinsel (wie Lightroom) ----------
+ * Strich = Liste von Punkten mit Radius (Originalpixel).
+ * Sucht automatisch eine passende Quelle daneben, kopiert deren Struktur
+ * und gleicht Farbe und Helligkeit am Rand an (Reparaturpinsel Prinzip).
+ */
+export function buildPatch(img, stroke) {
+  const r = stroke.r, pts = stroke.pts;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of pts) { x0 = Math.min(x0, x - r); y0 = Math.min(y0, y - r); x1 = Math.max(x1, x + r); y1 = Math.max(y1, y + r); }
+  const ring = Math.max(3, Math.round(r * 0.5));
+  const bx = Math.max(0, Math.floor(x0 - ring - 2)), by = Math.max(0, Math.floor(y0 - ring - 2));
+  const bx1 = Math.min(img.w, Math.ceil(x1 + ring + 2)), by1 = Math.min(img.h, Math.ceil(y1 + ring + 2));
+  const bw = bx1 - bx, bh = by1 - by;
+  if (bw < 2 || bh < 2) return null;
+  const n = bw * bh;
+  const m = new Float32Array(n);
+  const lp = pts.map(([x, y]) => [x - bx, y - by]);
+  if (lp.length === 1) fillDisc(m, bw, bh, lp[0][0], lp[0][1], r);
+  for (let i = 1; i < lp.length; i++) capsule(m, bw, bh, lp[i - 1], lp[i], r);
+  const big = grow(m, bw, bh, ring, 0);
+  const ringW = new Float32Array(n);
+  for (let i = 0; i < n; i++) ringW[i] = big[i] > 0.5 && m[i] < 0.5 ? 1 : 0;
+  const d = img.data, W = img.w;
+  const T = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) { const s = ((by + y) * W + bx + x) * 3, o = y * bw + x; T[0][o] = d[s]; T[1][o] = d[s + 1]; T[2][o] = d[s + 2]; }
+  // Quelle suchen: Kandidaten rund um die Stelle, Bewertung am Rand (Struktur und Helligkeit)
+  const step = Math.max(1, Math.round(Math.sqrt(n / 6000)));
+  const ringIdx = [], inIdx = [];
+  for (let y = 0; y < bh; y += step) for (let x = 0; x < bw; x += step) { const o = y * bw + x; if (ringW[o]) ringIdx.push(o); else if (m[o] > 0.5) inIdx.push(o); }
+  const lum = (src, sx, sy, o) => { const x = o % bw, y = (o / bw) | 0, s = ((sy + y) * W + sx + x) * 3; return 0.299 * src[s] + 0.587 * src[s + 1] + 0.114 * src[s + 2]; };
+  let tMean = 0; for (const o of ringIdx) tMean += lum(d, bx, by, o); tMean /= Math.max(1, ringIdx.length);
+  let tVar = 0; for (const o of ringIdx) { const v = lum(d, bx, by, o) - tMean; tVar += v * v; } tVar /= Math.max(1, ringIdx.length);
+  const size = Math.max(x1 - x0, y1 - y0);
+  let best = null;
+  for (const f of [0.75, 1.1, 1.6, 2.3]) {
+    const dist = size * f + r * 0.5;
+    for (let a = 0; a < 16; a++) {
+      const ang = (a / 16) * Math.PI * 2, ox = Math.round(Math.cos(ang) * dist), oy = Math.round(Math.sin(ang) * dist);
+      const sx = bx + ox, sy = by + oy;
+      if (sx < 0 || sy < 0 || sx + bw > img.w || sy + bh > img.h) continue;
+      let sMean = 0; for (const o of ringIdx) sMean += lum(d, sx, sy, o); sMean /= Math.max(1, ringIdx.length);
+      let e = 0; for (const o of ringIdx) { const v = lum(d, bx, by, o) - tMean - (lum(d, sx, sy, o) - sMean); e += v * v; }
+      e /= Math.max(1, ringIdx.length);
+      // Innen soll die Quelle so ruhig sein wie der Rand der Zielstelle (keine Kanten hineinkopieren)
+      let im = 0, iv = 0; for (const o of inIdx) im += lum(d, sx, sy, o); im /= Math.max(1, inIdx.length);
+      for (const o of inIdx) { const v = lum(d, sx, sy, o) - im; iv += v * v; } iv /= Math.max(1, inIdx.length);
+      const score = e + Math.abs(iv - tVar) * 0.6 + Math.abs(sMean - tMean) * 0.8 + f * 4;
+      if (!best || score < best.score) best = { score, sx, sy };
+    }
+  }
+  let S;
+  if (best) {
+    S = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) { const s = ((best.sy + y) * W + best.sx + x) * 3, o = y * bw + x; S[0][o] = d[s]; S[1][o] = d[s + 1]; S[2][o] = d[s + 2]; }
+  } else {
+    // keine Quelle möglich (Bildrand): nur glatt auffüllen
+    S = normConv(T, ringW, bw, bh, Math.max(2, r * 0.8));
+  }
+  // Rand Differenz ins Innere ziehen (nahtloser Übergang)
+  const D = [0, 1, 2].map((c) => { const t = new Float32Array(n); for (let i = 0; i < n; i++) t[i] = ringW[i] ? T[c][i] - S[c][i] : 0; return t; });
+  const Dc = normConv(D, ringW, bw, bh, Math.max(2, r * 0.6), D.map(() => new Float32Array(n)));
+  const A = gauss(grow(m, bw, bh, Math.max(1, r * 0.15), 0), bw, bh, Math.max(0.8, r * 0.18));
+  const R = [0, 1, 2].map((c) => { const o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = S[c][i] + Dc[c][i]; return o; });
+  return { bx, by, bw, bh, R, A };
+}
+
+export function applyPatches(pl, rx, ry, rw, rh, k, ox, oy, patches) {
+  if (!patches || !patches.length) return;
+  for (const p of patches) {
+    if (!p) continue;
+    const tx0 = Math.max(rx, Math.floor((p.bx - ox) / k)), tx1 = Math.min(rx + rw, Math.ceil((p.bx + p.bw - ox) / k));
+    const ty0 = Math.max(ry, Math.floor((p.by - oy) / k)), ty1 = Math.min(ry + rh, Math.ceil((p.by + p.bh - oy) / k));
+    for (let y = ty0; y < ty1; y++) {
+      const py = clamp((y + 0.5) * k + oy - p.by - 0.5, 0, p.bh - 1.001), y0 = py | 0, fy = py - y0;
+      for (let x = tx0; x < tx1; x++) {
+        const px = clamp((x + 0.5) * k + ox - p.bx - 0.5, 0, p.bw - 1.001), x0 = px | 0, fx = px - x0, o = y0 * p.bw + x0;
+        const bil = (f) => (f[o] * (1 - fx) + f[o + 1] * fx) * (1 - fy) + (f[o + p.bw] * (1 - fx) + f[o + p.bw + 1] * fx) * fy;
+        const a = bil(p.A);
+        if (a < 0.003) continue;
+        const t = (y - ry) * rw + (x - rx);
+        for (let c = 0; c < 3; c++) pl[c][t] += (bil(p.R[c]) - pl[c][t]) * a;
       }
     }
   }
-  spots.push({ x: fx, y: fy, r, m: "a" });
-  return { spots, action: "added" };
 }

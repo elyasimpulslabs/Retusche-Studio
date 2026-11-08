@@ -6,13 +6,14 @@ const CANVAS_MAX = 16000000;
 const SR_MAX = 12500000;
 
 /* ---------- Zustand ---------- */
-const DEF = { blemish: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
-const AUTO = { blemish: 60, skin: 28, tone: 35, eyes: 30, teeth: 45, sharpen: 25 };
+const DEF = { strokes: [], blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
+const AUTO = { blemish: 60, marks: 55, skin: 28, tone: 35, eyes: 30, teeth: 45, sharpen: 25 };
 let P = clone(DEF);
 let hist = [], hi = -1;
 let img = null; // {name, w, h, pw, ph, noise, raw}
-let faces = [], analyzed = false, spotCount = 0, hasTeeth = false;
+let faces = [], analyzed = false, spotCount = 0, markCount = 0, hasTeeth = false;
 let tool = "auto", blemMode = "auto", enhMode = "denoise", autoAmt = 70;
+let brushSize = 44, paintStroke = null;
 let showMask = false, split = false, splitX = 0.5, holdBefore = false;
 const SR = { on: false, amt: 100 };
 const exp = { maxEdge: 0, quality: 95 };
@@ -32,10 +33,11 @@ W.onmessage = (ev) => {
     case "loaded": onLoaded(m); break;
     case "progress": setBusy(m.label, m.p); break;
     case "analyzed": hasTeeth = m.teeth; resolve("analyzed", m); break;
-    case "count": spotCount = m.count; updateBadges(); if (tool === "blem") updateMeta(); break;
+    case "count": spotCount = m.count; markCount = m.marks || 0; updateBadges(); updateMeta(); break;
     case "rendered": {
       putRGBA(afterCanvas, m.rgba, m.w, m.h);
       rendering = false;
+      if (paintStroke && paintStroke.done) paintStroke = null;
       draw();
       if (dirty) sendRender(); else scheduleRegion();
       break;
@@ -51,8 +53,8 @@ W.onmessage = (ev) => {
       break;
     }
     case "spots": {
-      P.spots = m.spots; commit(); requestRender();
-      const t = { added: "Stelle wird entfernt", removed: "Stelle wiederhergestellt", kept: "Stelle bleibt erhalten", restored: "Stelle wird wieder entfernt" }[m.action];
+      if (JSON.stringify(m.spots) !== JSON.stringify(P.spots)) { P.spots = m.spots; commit(); requestRender(); }
+      const t = { added: "Stelle wird entfernt", already: "Diese Stelle wird bereits entfernt", kept: "Stelle bleibt erhalten", alreadyKept: "Diese Stelle bleibt schon erhalten", unmarked: "Deine Markierung aufgehoben", restored: "Stelle wird wieder entfernt", nothing: "Hier wurde nichts erkannt" }[m.action];
       if (t) toast(t);
       break;
     }
@@ -144,6 +146,16 @@ function draw() {
     ctx.moveTo(sx + 4, cssH / 2 - 5); ctx.lineTo(sx + 9, cssH / 2); ctx.lineTo(sx + 4, cssH / 2 + 5); ctx.stroke();
     $("lblBefore").style.left = "12px"; $("lblAfter").style.right = "12px";
   } else side(false);
+  if (paintStroke) {
+    ctx.save();
+    ctx.strokeStyle = ctx.fillStyle = "rgba(255,58,58,0.5)";
+    ctx.lineCap = ctx.lineJoin = "round";
+    ctx.lineWidth = paintStroke.r * 2 * view.s;
+    const p0 = paintStroke.pts[0];
+    if (paintStroke.pts.length === 1) { ctx.beginPath(); ctx.arc(dx + p0[0] * view.s, dy + p0[1] * view.s, paintStroke.r * view.s, 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.beginPath(); ctx.moveTo(dx + p0[0] * view.s, dy + p0[1] * view.s); for (const p of paintStroke.pts) ctx.lineTo(dx + p[0] * view.s, dy + p[1] * view.s); ctx.stroke(); }
+    ctx.restore();
+  }
 }
 function scheduleRegion() {
   clearTimeout(regionTimer);
@@ -171,10 +183,18 @@ cv.addEventListener("pointerdown", (e) => {
   if (!img) return;
   cv.setPointerCapture(e.pointerId);
   ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (ptrs.size === 1 && tool === "heal" && !(split && Math.abs(e.offsetX - splitX * cssW) < 26)) {
+    const fx = (e.offsetX - view.tx) / view.s, fy = (e.offsetY - view.ty) / view.s;
+    paintStroke = { r: brushSize / 2 / view.s, pts: [[fx, fy]] };
+    gest = { type: "paint" };
+    draw();
+    return;
+  }
   if (ptrs.size === 1) {
     const nearKnob = split && Math.abs(e.offsetX - splitX * cssW) < 26;
     gest = { type: nearKnob ? "split" : "tap", x0: e.offsetX, y0: e.offsetY, t0: performance.now(), tx: view.tx, ty: view.ty };
   } else if (ptrs.size === 2) {
+    if (gest && gest.type === "paint") { paintStroke = null; }
     const [a, b] = [...ptrs.values()];
     gest = { type: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), s0: view.s, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, tx: view.tx, ty: view.ty };
   }
@@ -182,6 +202,11 @@ cv.addEventListener("pointerdown", (e) => {
 cv.addEventListener("pointermove", (e) => {
   if (!ptrs.has(e.pointerId) || !gest) return;
   ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (gest.type === "paint" && paintStroke) {
+    const fx = (e.offsetX - view.tx) / view.s, fy = (e.offsetY - view.ty) / view.s, l = paintStroke.pts[paintStroke.pts.length - 1];
+    if (Math.hypot(fx - l[0], fy - l[1]) > paintStroke.r * 0.3) { paintStroke.pts.push([fx, fy]); draw(); }
+    return;
+  }
   if (gest.type === "split") { splitX = clamp(e.offsetX / cssW, 0.02, 0.98); draw(); return; }
   if (gest.type === "tap" && Math.hypot(e.offsetX - gest.x0, e.offsetY - gest.y0) > 8) gest.type = "pan";
   if (gest.type === "pan") { view.tx = gest.tx + e.offsetX - gest.x0; view.ty = gest.ty + e.offsetY - gest.y0; clampView(); draw(); }
@@ -196,6 +221,15 @@ cv.addEventListener("pointermove", (e) => {
 const endPtr = (e) => {
   if (!ptrs.has(e.pointerId)) return;
   ptrs.delete(e.pointerId);
+  if (gest && gest.type === "paint" && ptrs.size === 0) {
+    if (paintStroke) {
+      const st = { r: Math.round(paintStroke.r * 10) / 10, pts: paintStroke.pts.map(([x, y]) => [Math.round(x), Math.round(y)]) };
+      paintStroke.done = true;
+      P.strokes = [...P.strokes, st]; commit(); requestRender(); updateToolDots();
+      if (tool === "heal") renderPanel();
+    }
+    gest = null; return;
+  }
   if (gest && gest.type === "tap" && ptrs.size === 0 && performance.now() - gest.t0 < 400) onTap(gest.x0, gest.y0);
   if (ptrs.size === 0) { gest = null; scheduleRegion(); }
   else if (gest && gest.type === "pinch") gest = null;
@@ -205,10 +239,10 @@ cv.addEventListener("pointercancel", endPtr);
 cv.addEventListener("wheel", (e) => { if (!img) return; e.preventDefault(); zoomAt(view.s * Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY); draw(); scheduleRegion(); }, { passive: false });
 function onTap(x, y) {
   const fx = (x - view.tx) / view.s, fy = (y - view.ty) / view.s;
-  if (tool === "blem" && blemMode === "tap") {
+  if (tool === "blem" && (blemMode === "tap" || blemMode === "keep")) {
     if (fx < 0 || fy < 0 || fx > img.w || fy > img.h) return;
     if (!faces.length) { toast("Kein Gesicht erkannt"); return; }
-    W.postMessage({ type: "tap", x: fx, y: fy, spots: P.spots });
+    W.postMessage({ type: "tap", x: fx, y: fy, spots: P.spots, mode: blemMode === "keep" ? "keep" : "add" });
     return;
   }
   const now = performance.now();
@@ -428,7 +462,9 @@ function applyAuto(amt, doCommit = true) {
 /* ---------- Werkzeuge ---------- */
 const TOOLS = [
   { id: "auto", label: "Auto", icon: "i-auto" },
+  { id: "heal", label: "Entfernen", icon: "i-heal", keys: ["strokes"], face: false },
   { id: "blem", label: "Pickel", icon: "i-blem", keys: ["blemish"], face: true },
+  { id: "marks", label: "Flecken", icon: "i-marks", keys: ["marks"], face: true },
   { id: "skin", label: "Haut", icon: "i-skin", keys: ["skin"], face: true },
   { id: "tone", label: "Hautton", icon: "i-tone", keys: ["tone"], face: true },
   { id: "eyes", label: "Augen", icon: "i-eye", keys: ["eyes"], face: true },
@@ -450,7 +486,7 @@ function buildTools() {
 function updateToolDots() {
   for (const b of $("tools").children) {
     const t = TOOLS.find((x) => x.id === b.dataset.id);
-    const on = t.keys ? t.keys.some((k) => P[k]) || (t.id === "blem" && P.spots.length) || (t.id === "enh" && SR.on) : false;
+    const on = t.keys ? t.keys.some((k) => (Array.isArray(P[k]) ? P[k].length : P[k])) || (t.id === "blem" && P.spots.length) || (t.id === "enh" && SR.on) : false;
     let d = b.querySelector(".on");
     if (on && !d) { d = document.createElement("i"); d.className = "on"; b.appendChild(d); }
     if (!on && d) d.remove();
@@ -458,7 +494,7 @@ function updateToolDots() {
   }
 }
 function selectTool(id) {
-  if (tool === "blem" && id !== "blem" && blemMode === "tap") { blemMode = "auto"; }
+  if (tool === "blem" && id !== "blem" && blemMode !== "auto") { blemMode = "auto"; }
   tool = id;
   for (const b of $("tools").children) b.classList.toggle("sel", b.dataset.id === id);
   renderPanel(); updateToolDots();
@@ -502,10 +538,14 @@ function head(title, meta) {
   return h;
 }
 function desc(t) { const p = document.createElement("p"); p.className = "desc"; p.textContent = t; return p; }
-function updateMeta() { const m = $("pmeta"); if (m && tool === "blem") m.innerHTML = `<b>${spotCount}</b> ${spotCount === 1 ? "Stelle" : "Stellen"}`; }
+function updateMeta() {
+  const m = $("pmeta"); if (!m) return;
+  if (tool === "blem") m.innerHTML = `<b>${spotCount}</b> ${spotCount === 1 ? "Stelle" : "Stellen"}`;
+  if (tool === "marks") m.innerHTML = `<b>${markCount}</b> ${markCount === 1 ? "Fleck" : "Flecken"}`;
+}
 function updateBadges() {
   $("tagFaces").lastChild.textContent = faces.length === 1 ? "1 Gesicht" : faces.length + " Gesichter";
-  $("tagSpots").lastChild.textContent = spotCount === 1 ? "1 Stelle" : spotCount + " Stellen";
+  $("tagSpots").lastChild.textContent = (spotCount === 1 ? "1 Stelle" : spotCount + " Stellen") + (markCount ? ` · ${markCount} ${markCount === 1 ? "Fleck" : "Flecken"}` : "");
   $("tagSpots").hidden = !faces.length;
 }
 function noiseLabel() {
@@ -524,14 +564,31 @@ function renderPanel() {
       p.append(b, slider(null, "Intensität", { get: () => autoAmt, set: (v) => { autoAmt = v; applyAuto(v, false); }, unit: " %", def: 70, compact: true, onInput: () => {} }));
       break;
     }
+    case "heal": {
+      const n = P.strokes.length;
+      p.append(head("Entfernen", n ? `<b>${n}</b> ${n === 1 ? "Stelle" : "Stellen"}` : ""), desc("Mit einem Finger über die Stelle wischen. Sie wird rot markiert und beim Loslassen entfernt. Zoomen mit zwei Fingern."));
+      const row = document.createElement("div"); row.className = "row";
+      const g = document.createElement("div"); g.className = "grow";
+      g.append(slider(null, "Pinselgröße", { min: 12, max: 160, get: () => brushSize, set: (v) => (brushSize = v), unit: " px", def: 44, noRender: true, noCommit: true, compact: true }));
+      const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Letzte löschen"; del.disabled = !n;
+      del.onclick = () => { if (!P.strokes.length) return; P.strokes = P.strokes.slice(0, -1); commit(); requestRender(); renderPanel(); updateToolDots(); };
+      row.append(g, del);
+      p.append(row);
+      break;
+    }
     case "blem": {
       p.append(head("Pickel & Unreinheiten", ""));
-      p.append(seg([["auto", "Automatisch"], ["tap", "Antippen"]], blemMode, (v) => { blemMode = v; if (v === "tap" && !showMask) setMask(true); renderPanel(); }));
+      p.append(seg([["auto", "Automatisch"], ["tap", "Antippen"], ["keep", "Behalten"]], blemMode, (v) => { blemMode = v; if (v !== "auto" && !showMask) setMask(true); renderPanel(); }));
       if (blemMode === "auto") p.append(slider("blemish", "Empfindlichkeit", { unit: " %" }));
-      else p.append(desc("Tippe auf eine Stelle, um sie zu entfernen. Tippe auf eine erkannte Stelle (pink), um sie zu behalten, z. B. ein Leberfleck."));
+      else if (blemMode === "tap") p.append(desc("Tippe auf weitere Stellen, um sie zu entfernen. Schon markierte Stellen bleiben markiert. Rückgängig oben links."));
+      else p.append(desc("Tippe auf eine erkannte Stelle (pink), die bleiben soll, z. B. ein Leberfleck oder Muttermal."));
       updateMeta();
       break;
     }
+    case "marks":
+      p.append(head("Dunkle Flecken", ""), desc("Pigmentflecken, Aknemale und dunkle Stellen werden in Helligkeit und Farbe an die Haut angeglichen. Die Struktur bleibt komplett erhalten. In der Maske violett."), slider("marks", "Empfindlichkeit", { unit: " %" }));
+      updateMeta();
+      break;
     case "skin":
       p.append(head("Haut glätten", "Poren bleiben"), desc("Beruhigt Flecken und Unebenheiten in den mittleren Frequenzen. Die feine Hautstruktur wird nie weichgezeichnet."), slider("skin", "Glätten", { unit: " %" }));
       break;
