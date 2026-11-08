@@ -272,7 +272,7 @@ export function analyzeFace(img, lmFull, idx) {
   const facePoly = [];
   for (let i = 0; i <= 16; i++) facePoly.push(Lp(i));
   facePoly.push(...forehead);
-  fillPoly(faceReg, aw, ah, facePoly);
+  fillPoly(faceReg, aw, ah, scalePoly(facePoly, 1.07)); // etwas über die Kontur hinaus, Farbtest grenzt Hintergrund aus
   const down = (p, f) => [p[0] - uu[0] * fh * f, p[1] - uu[1] * fh * f];
   const neckPoly = [];
   for (let i = 3; i <= 13; i++) neckPoly.push(Lp(i));
@@ -318,7 +318,7 @@ export function analyzeFace(img, lmFull, idx) {
     col *= smooth(mY * 0.28, mY * 0.5, Y[i]);
     const texOk = 1 - smooth(0.06, 0.11, texS[i] / Math.max(20, mY));
     const reg = Math.max(faceS[i], neckS[i] * 0.85 * texOk);
-    skin[i] = clamp(reg * col * (1 - featS[i]), 0, 1);
+    skin[i] = clamp(reg * Math.pow(col, 0.55) * (1 - featS[i]), 0, 1); // weicher Farbtest: auch Schatten und Bartansatz gehören zur Haut
   }
   const skinS = gauss(skin, aw, ah, 1.5 * s);
 

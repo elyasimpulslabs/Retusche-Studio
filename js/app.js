@@ -7,7 +7,7 @@ const SR_MAX = 12500000;
 
 /* ---------- Zustand ---------- */
 const DEF = { strokes: [], restores: [], blemFade: 100, blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
-const AUTO = { blemish: 60, marks: 55, skin: 28, tone: 35, eyes: 30, teeth: 45, sharpen: 25 };
+const AUTO = { blemish: 70, marks: 70, skin: 50, tone: 65, eyes: 20, teeth: 45, sharpen: 20 };
 let P = clone(DEF);
 let hist = [], hi = -1;
 let img = null; // {name, w, h, pw, ph, noise, raw}
@@ -20,7 +20,7 @@ const exp = { maxEdge: 0, quality: 95 };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
 /* ---------- Worker ---------- */
-const W = new Worker(new URL("./worker.js?v=6", import.meta.url), { type: "module" });
+const W = new Worker(new URL("./worker.js?v=7", import.meta.url), { type: "module" });
 let rendering = false, dirty = false, version = 0, regionTimer = 0, regionBusy = false;
 let afterCanvas = document.createElement("canvas"), beforeCanvas = document.createElement("canvas");
 let region = null;
