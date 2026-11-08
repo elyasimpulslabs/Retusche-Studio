@@ -6,8 +6,8 @@ const CANVAS_MAX = 16000000;
 const SR_MAX = 12500000;
 
 /* ---------- Zustand ---------- */
-const DEF = { strokes: [], restores: [], blemFade: 100, texture: 100, blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
-const AUTO = { blemish: 70, marks: 70, skin: 50, tone: 65, eyes: 20, teeth: 45, sharpen: 20 };
+const DEF = { strokes: [], restores: [], blemFade: 100, texture: 100, uniform: 0, blemish: 0, marks: 0, skin: 0, tone: 0, eyes: 0, teeth: 0, sharpen: 0, denoise: 0, detail: 0, exposure: 0, contrast: 0, warmth: 0, spots: [] };
+const AUTO = { blemish: 70, marks: 70, skin: 50, tone: 65, uniform: 25, eyes: 20, teeth: 45, sharpen: 20 };
 let P = clone(DEF);
 let hist = [], hi = -1;
 let img = null; // {name, w, h, pw, ph, noise, raw}
@@ -20,7 +20,7 @@ const exp = { maxEdge: 0, quality: 95 };
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
 /* ---------- Worker ---------- */
-const W = new Worker(new URL("./worker.js?v=9", import.meta.url), { type: "module" });
+const W = new Worker(new URL("./worker.js?v=10", import.meta.url), { type: "module" });
 let rendering = false, dirty = false, version = 0, regionTimer = 0, regionBusy = false;
 let afterCanvas = document.createElement("canvas"), beforeCanvas = document.createElement("canvas");
 let region = null;
@@ -546,7 +546,7 @@ const TOOLS = [
   { id: "blem", label: "Pickel", icon: "i-blem", keys: ["blemish"], face: true },
   { id: "marks", label: "Flecken", icon: "i-marks", keys: ["marks"], face: true },
   { id: "skin", label: "Haut", icon: "i-skin", keys: ["skin"], face: true },
-  { id: "tone", label: "Hautton", icon: "i-tone", keys: ["tone"], face: true },
+  { id: "tone", label: "Hautton", icon: "i-tone", keys: ["tone", "uniform"], face: true },
   { id: "eyes", label: "Augen", icon: "i-eye", keys: ["eyes"], face: true },
   { id: "teeth", label: "Zähne", icon: "i-teeth", keys: ["teeth"], face: true },
   { id: "enh", label: "Verbessern", icon: "i-enh", keys: ["denoise", "detail"] },
@@ -683,7 +683,10 @@ function renderPanel() {
       return;
       break;
     case "tone":
-      p.append(head("Hautton angleichen", "Dodge & Burn"), desc("Gleicht Rötungen, Schatten und fleckige Stellen aus. Die Form des Gesichts bleibt erhalten."), slider("tone", "Angleichen", { unit: " %" }));
+      p.append(head("Hautton", "Dodge & Burn"), desc("Angleichen gleicht Helligkeit und Rötungen aus. Farbe vereinheitlicht den Farbton der ganzen Haut, die Helligkeit bleibt. Glanz und tiefe Schatten bleiben geschützt."),
+        slider("tone", "Angleichen", { unit: " %", compact: true }), slider("uniform", "Farbe vereinheitlichen", { unit: " %", compact: true }));
+      p.style.gap = "6px";
+      return;
       break;
     case "eyes":
       p.append(head("Augen", ""), desc("Hellt Iris und Augenweiß auf und betont die Details."), slider("eyes", "Aufhellen", { unit: " %" }));

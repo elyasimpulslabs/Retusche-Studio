@@ -412,7 +412,7 @@ export function analyzeFace(img, lmFull, idx) {
     idx, cx0, cy0, cw, ch, aw, ah, ax, ay, s, fw, faceWFull: faceW, A, Y,
     stats: { mdD, sdD, mdR, sdR, mdB, sdB }, dA, rA,
     scoreP, labelP: new Int32Array(n), mp: null, PD: null,
-    skin: skinS, score, allow, eye: eyeS, teeth: teethS, mouthY, mY,
+    skin: skinS, score, allow, eye: eyeS, teeth: teethS, mouthY, mY, mCb, mCr,
     label: new Int32Array(n), comps: [], mb: new Float32Array(n), H: null, B2: null, B3: null,
     lm: lmFull, box: [cx0, cy0, cw, ch]
   };
@@ -548,6 +548,8 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
   for (let y = 0; y < eh; y++) { const so = (ey0 - ry + y) * rw + (ex0 - rx); for (let c = 0; c < 3; c++) sub[c].set(pl[c].subarray(so, so + ew), y * ew); }
   const B1 = sub.map((c) => gauss(c, ew, eh, r1));
   const S = sampler(F);
+  const amU = (P.uniform || 0) / 100;
+  const hiA = Math.min(F.mY * 1.5, 215), hiB = Math.min(F.mY * 1.95, 245), loA = F.mY * 0.3, loB = F.mY * 0.5;
   const amS = P.skin / 100, amT = P.tone / 100, amE = P.eyes / 100, amZ = P.teeth / 100;
   const doTeeth = F.teeth && amZ > 0;
   const texK = ((P.texture ?? 100) - 100) / 100;
@@ -564,6 +566,9 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
       const so = (y - ey0) * ew + (x - ex0), po = (y - ry) * rw + (x - rx);
       if (skinMap && sk > skinMap[po]) skinMap[po] = sk;
       const O = [sub[0][so], sub[1][so], sub[2][so]];
+      const Yo = luma(O[0], O[1], O[2]);
+      const prot = Math.max(smooth(hiA, hiB, Yo), 1 - smooth(loA, loB, Yo));
+      const skE = sk * (1 - 0.85 * prot); // Wirkung auf Haut ohne Glanz und Tiefschatten
       const out = [0, 0, 0];
       const low = [0, 0, 0];
       const mid = [0, 0, 0], fine = [0, 0, 0];
@@ -572,15 +577,17 @@ function synthFace(pl, rx, ry, rw, rh, k, F, P, skinMap, Rm, oxy, cover) {
         const fn = O[c] - b1;
         const b1h = b1 + mb * (h - b1);
         fine[c] = fn * (1 - 0.55 * mb) * (1 + texK * sk);
-        mid[c] = (b1h - b2) * (1 - amS * 0.9 * sk);
+        mid[c] = (b1h - b2) * (1 - amS * 0.9 * skE);
         low[c] = b2;
       }
-      if (amT > 0 && sk > 0.002) {
+      if ((amT > 0 || amU > 0) && skE > 0.002) {
         const b3r = S(F.B3[0], ax, ay), b3g = S(F.B3[1], ax, ay), b3b = S(F.B3[2], ax, ay);
         const Y = luma(low[0], low[1], low[2]), cb = toCb(low[0], low[1], low[2]), cr = toCr(low[0], low[1], low[2]);
         const Y3 = luma(b3r, b3g, b3b), cb3 = toCb(b3r, b3g, b3b), cr3 = toCr(b3r, b3g, b3b);
-        const f = amT * sk;
-        const Yn = Y - f * 0.55 * (Y - Y3), cbn = cb - f * 0.85 * (cb - cb3), crn = cr - f * 0.85 * (cr - cr3);
+        const f = amT * skE, u = amU * skE * 0.7;
+        let Yn = Y - f * 0.55 * (Y - Y3), cbn = cb - f * 0.85 * (cb - cb3), crn = cr - f * 0.85 * (cr - cr3);
+        // Farbe vereinheitlichen (wie Skin Tone Uniformity): Farbton und Sättigung zur Hautfarbe des Gesichts, Helligkeit bleibt
+        cbn += u * (F.mCb - cbn); crn += u * (F.mCr - crn);
         low[0] = Yn + 1.402 * crn; low[1] = Yn - 0.344136 * cbn - 0.714136 * crn; low[2] = Yn + 1.772 * cbn;
       }
       for (let c = 0; c < 3; c++) out[c] = low[c] + mid[c] + fine[c];
